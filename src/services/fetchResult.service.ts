@@ -23,17 +23,9 @@ export const generateFetchResult = async (
     }
 
     const fetchResultAndSave = async () => {
+        let fetchResult: { data: unknown };
         try {
-            const fetchResult = await fetcherService.fetchFetcher(fetcherId, fetcherConfig);
-            return await fetchResultRepository.updateFetchResultByFetcherIdAndFetchResultId(
-                fetcherId,
-                claimedFetchResult!._id.toString(),
-                {
-                    status: FetchStatus.COMPLETED,
-                    endDate: new Date(),
-                    data: fetchResult.data,
-                },
-            );
+            fetchResult = await fetcherService.fetchFetcher(fetcherId, fetcherConfig);
         } catch (error) {
             logger.error(
                 `Failed to generate fetch result for fetcher ${fetcherId}: ${
@@ -49,10 +41,26 @@ export const generateFetchResult = async (
                 },
             );
         }
+
+        return await fetchResultRepository.updateFetchResultByFetcherIdAndFetchResultId(
+            fetcherId,
+            claimedFetchResult!._id.toString(),
+            {
+                status: FetchStatus.COMPLETED,
+                endDate: new Date(),
+                data: fetchResult.data,
+            },
+        );
     };
     if (isAsync) {
         // Async
-        void fetchResultAndSave();
+        void fetchResultAndSave().catch((error) => {
+            logger.error(
+                `Async fetch result generation failed for fetcher ${fetcherId}: ${
+                    error instanceof Error ? error.message : 'Unknown fetch result error'
+                }`,
+            );
+        });
         return claimedFetchResult;
     }
     return await fetchResultAndSave(); // Sync
