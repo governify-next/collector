@@ -2,7 +2,9 @@ import * as fetchResultRepository from '../repositories/fetchResult.repository.j
 import * as fetcherService from './fetchers/fetcher.service.js';
 import { IFetchResult } from '../models/fetchResult.model.js';
 import { FetchStatus } from '../types/fetchStatus.js';
-import { ComputationError } from '../utils/customErrors.js';
+import { getLogger } from '../utils/logger.js';
+
+const logger = getLogger().setTag('fetchResult.service.ts');
 
 export const generateFetchResult = async (
     isAsync: boolean,
@@ -33,7 +35,12 @@ export const generateFetchResult = async (
                 },
             );
         } catch (error) {
-            await fetchResultRepository.updateFetchResultByFetcherIdAndFetchResultId(
+            logger.error(
+                `Failed to generate fetch result for fetcher ${fetcherId}: ${
+                    error instanceof Error ? error.message : 'Unknown fetch result error'
+                }`,
+            );
+            return await fetchResultRepository.updateFetchResultByFetcherIdAndFetchResultId(
                 fetcherId,
                 claimedFetchResult!._id.toString(),
                 {
@@ -41,7 +48,6 @@ export const generateFetchResult = async (
                     endDate: new Date(),
                 },
             );
-            throw new ComputationError('Failed to generate fetch result');
         }
     };
     if (isAsync) {
