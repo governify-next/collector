@@ -2,7 +2,9 @@ import * as fetchResultRepository from '../repositories/fetchResult.repository.j
 import * as fetcherService from './fetchers/fetcher.service.js';
 import { IFetchResult } from '../models/fetchResult.model.js';
 import { FetchStatus } from '../types/fetchStatus.js';
-import { ComputationError } from '../utils/customErrors.js';
+import { getLogger } from '../utils/logger.js';
+
+const logger = getLogger().setTag('fetchResult.service.ts');
 
 export const generateFetchResult = async (
     isAsync: boolean,
@@ -10,45 +12,66 @@ export const generateFetchResult = async (
     date: Date,
     fetcherConfig: Record<string, unknown>,
 ) => {
-    const initialFetchResult = await createInitialFetchResult(fetcherId, date, fetcherConfig);
+    const { claimedFetchResult, shouldFetch } = await claimInitialFetchResult(
+        fetcherId,
+        date,
+        fetcherConfig,
+    );
+
+    if (!shouldFetch) {
+        return claimedFetchResult;
+    }
+
     const fetchResultAndSave = async () => {
+        let fetchResult: { data: unknown };
         try {
-            const fetchResult = await fetcherService.fetchFetcher(fetcherId, fetcherConfig);
+            fetchResult = await fetcherService.fetchFetcher(fetcherId, fetcherConfig);
+        } catch (error) {
+            logger.error(
+                `Failed to generate fetch result for fetcher ${fetcherId}: ${
+                    error instanceof Error ? error.message : 'Unknown fetch result error'
+                }`,
+            );
             return await fetchResultRepository.updateFetchResultByFetcherIdAndFetchResultId(
                 fetcherId,
-                initialFetchResult._id.toString(),
-                {
-                    status: FetchStatus.COMPLETED,
-                    endDate: new Date(),
-                    data: fetchResult.data,
-                },
-            );
-        } catch (error) {
-            await fetchResultRepository.updateFetchResultByFetcherIdAndFetchResultId(
-                fetcherId,
-                initialFetchResult._id.toString(),
+                claimedFetchResult!._id.toString(),
                 {
                     status: FetchStatus.FAILED,
                     endDate: new Date(),
                 },
             );
-            throw new ComputationError('Failed to generate fetch result');
         }
+
+        return await fetchResultRepository.updateFetchResultByFetcherIdAndFetchResultId(
+            fetcherId,
+            claimedFetchResult!._id.toString(),
+            {
+                status: FetchStatus.COMPLETED,
+                endDate: new Date(),
+                data: fetchResult.data,
+            },
+        );
     };
     if (isAsync) {
         // Async
-        void fetchResultAndSave();
-        return initialFetchResult;
+        void fetchResultAndSave().catch((error) => {
+            logger.error(
+                `Async fetch result generation failed for fetcher ${fetcherId}: ${
+                    error instanceof Error ? error.message : 'Unknown fetch result error'
+                }`,
+            );
+        });
+        return claimedFetchResult;
     }
     return await fetchResultAndSave(); // Sync
 };
 
-const createInitialFetchResult = async (
+const claimInitialFetchResult = async (
     fetcherId: string,
     date: Date,
     fetcherConfig: Record<string, unknown>,
 ) => {
-    return await fetchResultRepository.createFetchResultByFetcherId(fetcherId, {
+    return await fetchResultRepository.claimFetchResultByFetcherId(fetcherId, {
         startDate: new Date(),
         endDate: null,
         date: date,
@@ -60,18 +83,6 @@ const createInitialFetchResult = async (
 
 export const getFetchResultsByFetcherId = async (fetcherId: string) => {
     return await fetchResultRepository.getFetchResultsByFetcherId(fetcherId);
-};
-
-export const getFetchResultsByFetcherIdAndFetchResultBody = async (
-    fetcherId: string,
-    date: Date,
-    fetcherConfig: Record<string, unknown>,
-) => {
-    return await fetchResultRepository.getFetchResultsByFetchResultBody(
-        fetcherId,
-        date,
-        fetcherConfig,
-    );
 };
 
 export const deleteFetchResultsByFetcherId = async (fetcherId: string) => {
