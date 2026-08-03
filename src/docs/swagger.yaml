@@ -1,9 +1,13 @@
-openapi: 3.0.0
+openapi: 3.0.3
 info:
     title: Fetcher API
     version: 1.0.0
     description: |
-        REST API for managing fetchers within Fetcher API.
+        REST API for discovering and executing fetchers and managing their persisted results.
+
+        Protected operations accept JWT bearer tokens issued for this API. Depending on the
+        operation, the token must represent either a user with the documented minimum system
+        role or an authenticated service.
 servers:
     - url: /
 
@@ -11,9 +15,6 @@ tags:
     - { name: Health, description: Server health check }
     - { name: Fetchers, description: Fetcher management and execution }
     - { name: Fetch Results, description: Fetch result generation and management }
-security:
-    - BearerAuth: []
-
 paths:
     # ──────────────────────────────────────────────
     # Health
@@ -31,22 +32,33 @@ paths:
                         application/json:
                             schema:
                                 type: object
+                                additionalProperties: false
                                 properties:
                                     status:
                                         type: string
+                                        enum: [ok]
+                                        example: ok
                                     message:
                                         type: string
+                                        example: Health check passed
+                                required:
+                                    - status
+                                    - message
 
     # ──────────────────────────────────────────────
     # Fetchers
     # ──────────────────────────────────────────────
     /api/v1/fetchers:
         get:
+            security:
+                - UserBearerAuth: []
             tags:
                 - Fetchers
             summary: Get all fetchers
             operationId: getFetchers
-            description: Retrieves all available fetchers and their metadata.
+            description: |
+                Retrieves all available fetchers and their metadata.
+                Requires a user token with the `ADMIN` or `SUPERADMIN` system role.
             responses:
                 '200':
                     description: Fetchers retrieved successfully.
@@ -63,6 +75,8 @@ paths:
                                                   $ref: '#/components/schemas/Fetcher'
                 '401':
                     $ref: '#/components/responses/Unauthorized'
+                '403':
+                    $ref: '#/components/responses/Forbidden'
                 '500':
                     $ref: '#/components/responses/InternalError'
 
@@ -70,11 +84,14 @@ paths:
         parameters:
             - $ref: '#/components/parameters/fetcherId'
         get:
+            security:
+                - UserBearerAuth: []
+                - ServiceBearerAuth: []
             tags:
                 - Fetchers
             summary: Get fetcher by ID
             operationId: getFetcherById
-            description: Retrieves the details of a specific fetcher by its ID.
+            description: Retrieves a specific fetcher. Accepts either a user token or a service token.
             responses:
                 '200':
                     description: Fetcher retrieved successfully.
@@ -98,11 +115,15 @@ paths:
         parameters:
             - $ref: '#/components/parameters/fetcherId'
         post:
+            security:
+                - UserBearerAuth: []
             tags:
                 - Fetchers
             summary: Execute a fetcher
             operationId: fetchFetcher
-            description: Executes the selected fetcher using the provided fetcher and audit configurations.
+            description: |
+                Executes the selected fetcher using its configuration.
+                Requires a user token with the `SUPERADMIN` system role.
             requestBody:
                 $ref: '#/components/requestBodies/FetchFetcherBody'
             responses:
@@ -119,6 +140,8 @@ paths:
                                               $ref: '#/components/schemas/FetcherExecutionResult'
                 '401':
                     $ref: '#/components/responses/Unauthorized'
+                '403':
+                    $ref: '#/components/responses/Forbidden'
                 '400':
                     $ref: '#/components/responses/ValidationError'
                 '404':
@@ -128,13 +151,21 @@ paths:
 
     /api/v1/fetchers/{fetcherId}/validate:
         parameters:
-            - $ref: '#/components/parameters/fetcherId'
+            - $ref: '#/components/parameters/fetcherIdCandidate'
         post:
+            security:
+                - UserBearerAuth: []
+                - ServiceBearerAuth: []
             tags:
                 - Fetchers
             summary: Validate fetcher configuration
             operationId: validateFetcher
-            description: Validates fetcher and audit configuration payloads against the fetcher's schema.
+            description: |
+                Checks whether the fetcher exists and, when `fetcherConfig` is supplied, validates
+                it against the fetcher's schema. An unknown `fetcherId` is reported in the successful
+                response as `valid: false`.
+
+                Accepts a service token or a user token with the `SUPERADMIN` system role.
             requestBody:
                 $ref: '#/components/requestBodies/ValidateFetcherBody'
             responses:
@@ -151,6 +182,8 @@ paths:
                                               $ref: '#/components/schemas/ValidateFetcherResult'
                 '401':
                     $ref: '#/components/responses/Unauthorized'
+                '403':
+                    $ref: '#/components/responses/Forbidden'
                 '400':
                     $ref: '#/components/responses/ValidationError'
                 '500':
@@ -164,11 +197,20 @@ paths:
             - $ref: '#/components/parameters/fetcherId'
             - $ref: '#/components/parameters/isAsync'
         post:
+            security:
+                - UserBearerAuth: []
+                - ServiceBearerAuth: []
             tags:
                 - Fetch Results
             summary: Generate a fetch result
             operationId: generateFetchResult
-            description: Creates a fetch result and optionally executes fetch generation asynchronously.
+            description: |
+                Claims a result for the given `date` and `fetcherConfig`. When `isAsync` is `false`,
+                processing finishes before the response; when it is `true`, the initial `IN_PROGRESS`
+                result is returned and processing continues in the background. If the same date and
+                configuration already exist, the existing result is returned.
+
+                Accepts a service token or a user token with the `SUPERADMIN` system role.
             requestBody:
                 $ref: '#/components/requestBodies/GenerateFetchResultBody'
             responses:
@@ -185,12 +227,12 @@ paths:
                                               $ref: '#/components/schemas/FetchResult'
                 '401':
                     $ref: '#/components/responses/Unauthorized'
+                '403':
+                    $ref: '#/components/responses/Forbidden'
                 '400':
                     $ref: '#/components/responses/ValidationError'
                 '404':
                     $ref: '#/components/responses/NotFound'
-                '422':
-                    $ref: '#/components/responses/ComputationError'
                 '500':
                     $ref: '#/components/responses/InternalError'
 
@@ -198,11 +240,16 @@ paths:
         parameters:
             - $ref: '#/components/parameters/fetcherId'
         get:
+            security:
+                - UserBearerAuth: []
+                - ServiceBearerAuth: []
             tags:
                 - Fetch Results
             summary: Get fetch results by fetcher ID
             operationId: getFetchResultsByFetcherId
-            description: Retrieves all fetch results associated with a given fetcher.
+            description: |
+                Retrieves all fetch results associated with a given fetcher.
+                Accepts a service token or a user token with the `SUPERADMIN` system role.
             responses:
                 '200':
                     description: Fetch results retrieved successfully.
@@ -219,16 +266,23 @@ paths:
                                                   $ref: '#/components/schemas/FetchResult'
                 '401':
                     $ref: '#/components/responses/Unauthorized'
+                '403':
+                    $ref: '#/components/responses/Forbidden'
                 '404':
                     $ref: '#/components/responses/NotFound'
                 '500':
                     $ref: '#/components/responses/InternalError'
         delete:
+            security:
+                - UserBearerAuth: []
+                - ServiceBearerAuth: []
             tags:
                 - Fetch Results
             summary: Delete fetch results by fetcher ID
             operationId: deleteFetchResultsByFetcherId
-            description: Deletes all fetch results associated with a given fetcher.
+            description: |
+                Deletes all fetch results associated with a given fetcher.
+                Accepts a service token or a user token with the `SUPERADMIN` system role.
             responses:
                 '200':
                     description: Fetch results deleted successfully.
@@ -243,6 +297,8 @@ paths:
                                               $ref: '#/components/schemas/DeleteManyResult'
                 '401':
                     $ref: '#/components/responses/Unauthorized'
+                '403':
+                    $ref: '#/components/responses/Forbidden'
                 '404':
                     $ref: '#/components/responses/NotFound'
                 '500':
@@ -253,11 +309,16 @@ paths:
             - $ref: '#/components/parameters/fetcherId'
             - $ref: '#/components/parameters/fetchResultId'
         get:
+            security:
+                - UserBearerAuth: []
+                - ServiceBearerAuth: []
             tags:
                 - Fetch Results
             summary: Get fetch result by fetcher ID and fetch result ID
             operationId: getFetchResultByFetcherIdAndFetchResultId
-            description: Retrieves a single fetch result by fetcher ID and fetch result ID.
+            description: |
+                Retrieves a single fetch result by fetcher ID and fetch result ID.
+                Accepts a service token or a user token with the `SUPERADMIN` system role.
             responses:
                 '200':
                     description: Fetch result retrieved successfully.
@@ -272,6 +333,8 @@ paths:
                                               $ref: '#/components/schemas/FetchResult'
                 '401':
                     $ref: '#/components/responses/Unauthorized'
+                '403':
+                    $ref: '#/components/responses/Forbidden'
                 '400':
                     $ref: '#/components/responses/ValidationError'
                 '404':
@@ -279,11 +342,16 @@ paths:
                 '500':
                     $ref: '#/components/responses/InternalError'
         put:
+            security:
+                - UserBearerAuth: []
+                - ServiceBearerAuth: []
             tags:
                 - Fetch Results
             summary: Update fetch result by fetcher ID and fetch result ID
             operationId: updateFetchResultByFetcherIdAndFetchResultId
-            description: Updates a fetch result by fetcher ID and fetch result ID.
+            description: |
+                Partially updates a fetch result by fetcher ID and fetch result ID.
+                Accepts a service token or a user token with the `SUPERADMIN` system role.
             requestBody:
                 $ref: '#/components/requestBodies/UpdateFetchResultBody'
             responses:
@@ -300,6 +368,8 @@ paths:
                                               $ref: '#/components/schemas/FetchResult'
                 '401':
                     $ref: '#/components/responses/Unauthorized'
+                '403':
+                    $ref: '#/components/responses/Forbidden'
                 '400':
                     $ref: '#/components/responses/ValidationError'
                 '404':
@@ -307,11 +377,16 @@ paths:
                 '500':
                     $ref: '#/components/responses/InternalError'
         delete:
+            security:
+                - UserBearerAuth: []
+                - ServiceBearerAuth: []
             tags:
                 - Fetch Results
             summary: Delete fetch result by fetcher ID and fetch result ID
             operationId: deleteFetchResultByFetcherIdAndFetchResultId
-            description: Deletes a fetch result by fetcher ID and fetch result ID.
+            description: |
+                Deletes a fetch result by fetcher ID and fetch result ID.
+                Accepts a service token or a user token with the `SUPERADMIN` system role.
             responses:
                 '200':
                     description: Fetch result deleted successfully.
@@ -326,6 +401,8 @@ paths:
                                               $ref: '#/components/schemas/FetchResult'
                 '401':
                     $ref: '#/components/responses/Unauthorized'
+                '403':
+                    $ref: '#/components/responses/Forbidden'
                 '400':
                     $ref: '#/components/responses/ValidationError'
                 '404':
@@ -335,11 +412,19 @@ paths:
 
 components:
     securitySchemes:
-        BearerAuth:
+        UserBearerAuth:
             type: http
             scheme: bearer
             bearerFormat: JWT
-            description: JWT token required when AUTHENTICATION_ENABLED=true.
+            description: |
+                JWT whose `type` claim is `user`. Operations also state the minimum accepted
+                `systemRole` (`ADMIN` or `SUPERADMIN`). Role priority is
+                `USER < ADMIN < SUPERADMIN`.
+        ServiceBearerAuth:
+            type: http
+            scheme: bearer
+            bearerFormat: JWT
+            description: JWT whose `type` claim is `service`.
 
     # ── Parameters ────────────────────────────
     parameters:
@@ -347,23 +432,36 @@ components:
             name: fetcherId
             in: path
             required: true
-            description: ID of the fetcher
+            description: |
+                Registered fetcher identifier. Current examples:
+                `FT_REST_BLUEJAY_REPORTER_LOGS`, `FT_GQL_GITHUB_PROJECTV2_ITEMS`,
+                `FT_GQL_GITHUB_PULL_REQUESTS`, `FT_GQL_GITHUB_ISSUES`, and
+                `FT_GQL_ZENHUB_ISSUES`.
             schema:
                 type: string
-                example: FT_REST_GITHUB_COMMITS
+                example: FT_GQL_GITHUB_ISSUES
         fetchResultId:
             name: fetchResultId
             in: path
             required: true
-            description: Fetch result identifier
+            description: MongoDB ObjectId of the fetch result
             schema:
                 type: string
+                pattern: '^[a-fA-F0-9]{24}$'
                 example: 67c9ff7b2ddf1b3940f9f321
+        fetcherIdCandidate:
+            name: fetcherId
+            in: path
+            required: true
+            description: Fetcher identifier to check; it does not have to be registered.
+            schema:
+                type: string
+                example: FT_GQL_GITHUB_ISSUES
         isAsync:
             name: isAsync
             in: query
             required: false
-            description: If true, creates the fetch result and executes processing in background.
+            description: If true, returns the claimed result and executes processing in the background.
             schema:
                 type: boolean
                 default: false
@@ -373,6 +471,7 @@ components:
     requestBodies:
         FetchFetcherBody:
             description: Request body for executing a fetcher
+            required: true
             content:
                 application/json:
                     schema:
@@ -381,7 +480,7 @@ components:
                             date:
                                 type: string
                                 format: date-time
-                                description: Fetch date used to initialize the fetch result
+                                description: Required ISO 8601 request date
                                 example: '2026-04-10T09:30:00.000Z'
                             fetcherConfig:
                                 $ref: '#/components/schemas/FetcherConfig'
@@ -392,9 +491,10 @@ components:
                         date: '2026-04-10T09:30:00.000Z'
                         fetcherConfig:
                             owner: governify
-                            repository: collector
+                            repository: fetcher
+                            token: github_pat_example
         ValidateFetcherBody:
-            description: Request body for validating fetcher configuration
+            description: Optional request body containing the configuration to validate
             content:
                 application/json:
                     schema:
@@ -405,10 +505,12 @@ components:
                     example:
                         fetcherConfig:
                             owner: governify
-                            repository: collector
+                            repository: fetcher
+                            token: github_pat_example
 
         GenerateFetchResultBody:
             description: Request body for generating a fetch result
+            required: true
             content:
                 application/json:
                     schema:
@@ -428,7 +530,8 @@ components:
                         date: '2026-04-10T09:30:00.000Z'
                         fetcherConfig:
                             owner: governify
-                            repository: collector
+                            repository: fetcher
+                            token: github_pat_example
 
         UpdateFetchResultBody:
             description: Request body for updating a fetch result
@@ -446,7 +549,7 @@ components:
     # ── Reusable responses ────────────────────────
     responses:
         Unauthorized:
-            description: Unauthorized request (missing/malformed Authorization header or invalid/expired token)
+            description: Missing, malformed, invalid, expired, or unsupported token
             content:
                 application/json:
                     schema:
@@ -459,7 +562,21 @@ components:
                         data: null
                         error:
                             message: Authorization header missing or malformed
-                            details: null
+
+        Forbidden:
+            description: Authenticated user does not have the required system role
+            content:
+                application/json:
+                    schema:
+                        $ref: '#/components/schemas/ErrorResponse'
+                    example:
+                        success: false
+                        message: Insufficient permissions
+                        httpStatus: 403
+                        appCode: FORBIDDEN
+                        data: null
+                        error:
+                            message: Insufficient permissions
 
         ValidationError:
             description: Validation error in the submitted data
@@ -496,23 +613,6 @@ components:
                         data: null
                         error:
                             message: Resource not found
-                            details: null
-
-        ComputationError:
-            description: Error while generating the fetch result data
-            content:
-                application/json:
-                    schema:
-                        $ref: '#/components/schemas/ErrorResponse'
-                    example:
-                        success: false
-                        message: Failed to generate fetch result
-                        httpStatus: 422
-                        appCode: COMPUTATION_ERROR
-                        data: null
-                        error:
-                            message: Failed to generate fetch result
-                            details: null
 
         InternalError:
             description: Internal server error
@@ -528,13 +628,25 @@ components:
                         data: null
                         error:
                             message: Internal server error
-                            details: null
 
     schemas:
         # ── Standard response ────────────────────
+        JsonValue:
+            description: Any JSON-compatible value, including null
+            anyOf:
+                - type: object
+                  nullable: true
+                  additionalProperties: true
+                - type: array
+                  items: {}
+                - type: string
+                - type: number
+                - type: boolean
+
         SuccessResponse:
             type: object
             description: Standard wrapper for all successful API responses
+            additionalProperties: false
             properties:
                 success:
                     type: boolean
@@ -549,14 +661,7 @@ components:
                     type: string
                     example: SUCCESS
                 data:
-                    description: Response payload
-                    nullable: true
-                    oneOf:
-                        - type: object
-                        - type: array
-                        - type: string
-                        - type: number
-                        - type: boolean
+                    $ref: '#/components/schemas/JsonValue'
                 error:
                     type: object
                     nullable: true
@@ -572,6 +677,7 @@ components:
         ErrorResponse:
             type: object
             description: Standard wrapper for all error API responses
+            additionalProperties: false
             properties:
                 success:
                     type: boolean
@@ -592,14 +698,9 @@ components:
                         message:
                             type: string
                         details:
-                            description: Additional error information (may be null)
-                            oneOf:
-                                - type: object
-                                - type: array
-                                - type: string
-                                - type: number
-                                - type: boolean
-                            nullable: true
+                            $ref: '#/components/schemas/JsonValue'
+                    required:
+                        - message
             required:
                 - success
                 - message
@@ -611,47 +712,40 @@ components:
         # ── Fetcher ─────────────────────────
         Fetcher:
             type: object
-            description: Fetcher definition and metadata
+            description: Serialized fetcher definition and metadata; the executable `fetch` function is omitted from JSON.
+            additionalProperties: false
             properties:
                 id:
                     type: string
-                    example: FT_REST_GITHUB_COMMITS
+                    description: Registered fetcher identifier
+                    example: FT_GQL_GITHUB_ISSUES
                 moreInfo:
                     $ref: '#/components/schemas/FetcherMoreInfo'
                 fetcherConfigSchema:
                     type: object
-                    description: Zod schema definition serialized as object
-                    example:
-                        type: object
-                        properties:
-                            owner:
-                                type: string
-                            repository:
-                                type: string
-                        required:
-                            - owner
-                            - repository
+                    description: Internal Zod schema serialized as JSON. Its structure is library-specific.
+                    additionalProperties: true
                 fetchScript:
                     type: string
-                    example: |
-                        async (_fetcherConfig) => {
-                          return { data: 'This is a placeholder for GitHub fetcher data' };
-                        }
+                    description: String representation of the fetcher's executable function
+                    example: 'async _fetcherConfig => ({ data: [] })'
             required:
                 - id
-                - type
                 - moreInfo
+                - fetcherConfigSchema
+                - fetchScript
 
         FetcherMoreInfo:
             type: object
             description: Human-readable fetcher metadata
+            additionalProperties: false
             properties:
                 title:
                     type: string
-                    example: GitHub Fetcher
+                    example: GitHub Issues Fetcher
                 description:
                     type: string
-                    example: Fetches data from GitHub repositories, including commits, issues, and pull requests.
+                    example: Fetches every raw issue of a GitHub repository.
                 example:
                     type: string
                     example: ''
@@ -661,31 +755,76 @@ components:
                 - example
 
         FetcherConfig:
-            type: object
-            description: Fetcher-specific configuration object (shape depends on fetcherId)
-            additionalProperties: true
+            description: |
+                Fetcher-specific configuration. GitHub fetchers use `owner`, `repository`, and
+                `token`; the ZenHub fetcher uses `workspaceId` and `token`; the Bluejay reporter
+                logs fetcher uses an empty object.
+            oneOf:
+                - $ref: '#/components/schemas/EmptyFetcherConfig'
+                - $ref: '#/components/schemas/GitHubFetcherConfig'
+                - $ref: '#/components/schemas/ZenHubFetcherConfig'
             example:
                 owner: governify
-                repository: collector
+                repository: fetcher
+                token: github_pat_example
+
+        EmptyFetcherConfig:
+            type: object
+            description: Configuration for `FT_REST_BLUEJAY_REPORTER_LOGS`
+            maxProperties: 0
+
+        GitHubFetcherConfig:
+            type: object
+            description: Configuration shared by all `FT_GQL_GITHUB_*` fetchers
+            additionalProperties: false
+            properties:
+                owner:
+                    type: string
+                    example: governify
+                repository:
+                    type: string
+                    example: fetcher
+                token:
+                    type: string
+                    description: GitHub token used by the upstream GraphQL request
+                    example: github_pat_example
+            required:
+                - owner
+                - repository
+                - token
+
+        ZenHubFetcherConfig:
+            type: object
+            description: Configuration for `FT_GQL_ZENHUB_ISSUES`
+            additionalProperties: false
+            properties:
+                workspaceId:
+                    type: string
+                    example: 5f1234567890abcdef123456
+                token:
+                    type: string
+                    description: ZenHub token used by the upstream GraphQL request
+                    example: zenhub_token_example
+            required:
+                - workspaceId
+                - token
 
         FetcherExecutionResult:
             type: object
             description: Result returned by a fetcher execution
+            additionalProperties: false
             properties:
                 data:
-                    description: Fetcher output payload
-                    oneOf:
-                        - type: string
-                        - type: object
-                        - type: array
+                    $ref: '#/components/schemas/JsonValue'
             required:
                 - data
             example:
-                data: This is a placeholder for GitHub fetcher data
+                data: []
 
         ValidateFetcherIssue:
             type: object
-            description: Validation issue returned by zod when config is invalid
+            description: Validation issue returned by Zod when the configuration is invalid
+            additionalProperties: true
             properties:
                 code:
                     type: string
@@ -704,25 +843,24 @@ components:
                 message:
                     type: string
                     example: 'Invalid input: expected string, received undefined'
-                source:
-                    type: string
-                    enum: [fetcherConfig]
-                    example: fetcherConfig
+            required:
+                - code
+                - path
+                - message
 
         ValidateFetcherResult:
             type: object
-            description: Result of validating fetcher and audit configuration payloads
+            description: Fetcher existence and configuration validation result
+            additionalProperties: false
             properties:
                 valid:
                     type: boolean
                     example: true
                 error:
                     type: string
-                    nullable: true
                     example: Invalid fetcherConfig
                 issues:
                     type: array
-                    nullable: true
                     items:
                         $ref: '#/components/schemas/ValidateFetcherIssue'
             required:
@@ -731,6 +869,7 @@ components:
         FetchResult:
             type: object
             description: Fetch result entity persisted in MongoDB
+            additionalProperties: false
             properties:
                 _id:
                     type: string
@@ -747,7 +886,6 @@ components:
                 date:
                     type: string
                     format: date-time
-                    nullable: true
                     example: '2026-04-06T11:00:00.000Z'
                 status:
                     type: string
@@ -756,12 +894,7 @@ components:
                 fetcherConfig:
                     $ref: '#/components/schemas/FetcherConfig'
                 data:
-                    nullable: true
-                    oneOf:
-                        - type: string
-                        - type: object
-                        - type: array
-                    example: This is a placeholder for GitHub fetcher data
+                    $ref: '#/components/schemas/JsonValue'
                 createdAt:
                     type: string
                     format: date-time
@@ -770,10 +903,26 @@ components:
                     type: string
                     format: date-time
                     example: '2026-04-06T11:00:00.000Z'
+                __v:
+                    type: integer
+                    description: MongoDB document version
+                    example: 0
+            required:
+                - _id
+                - startDate
+                - endDate
+                - date
+                - status
+                - fetcherConfig
+                - data
+                - createdAt
+                - updatedAt
+                - __v
 
         UpdateFetchResultRequest:
             type: object
             description: Partial payload for updating a fetch result
+            additionalProperties: false
             properties:
                 startDate:
                     type: string
@@ -792,15 +941,12 @@ components:
                 fetcherConfig:
                     $ref: '#/components/schemas/FetcherConfig'
                 data:
-                    nullable: true
-                    oneOf:
-                        - type: string
-                        - type: object
-                        - type: array
+                    $ref: '#/components/schemas/JsonValue'
 
         DeleteManyResult:
             type: object
             description: MongoDB delete many operation result
+            additionalProperties: false
             properties:
                 acknowledged:
                     type: boolean
