@@ -122,7 +122,16 @@ paths:
             summary: Execute a fetcher
             operationId: fetchFetcher
             description: |
-                Executes the selected fetcher using its configuration.
+                Executes the selected fetcher directly, without reading or writing `FetchResult`
+                cache entries. This endpoint is intended for manual or diagnostic executions.
+
+                Temporal rules:
+
+                | Fetcher capability | `CAPTURE` | `REPLAY` |
+                | --- | --- | --- |
+                | `SNAPSHOT` | Calls the external source for `effectiveAt`. | Rejected with `400`; a snapshot source cannot reconstruct an uncaptured past instant. |
+                | `HISTORICAL` | Calls the external source for `effectiveAt`. | Calls the historical external source for `effectiveAt`. |
+
                 Requires a user token with the `SUPERADMIN` system role.
             requestBody:
                 $ref: '#/components/requestBodies/FetchFetcherBody'
@@ -205,17 +214,37 @@ paths:
             summary: Generate a fetch result
             operationId: generateFetchResult
             description: |
-                Claims a result for the given `date` and `fetcherConfig`. When `isAsync` is `false`,
-                processing finishes before the response; when it is `true`, the initial `IN_PROGRESS`
-                result is returned and processing continues in the background. If the same date and
-                configuration already exist, the existing result is returned.
+                Resolves and persists the result identified by `fetcherId`, `effectiveAt` and the
+                canonical hash of `fetcherConfig`. Requests for that same logical key share one entry.
+
+                Resolution matrix when no reusable result exists:
+
+                | Fetcher capability | `CAPTURE` | `REPLAY` |
+                | --- | --- | --- |
+                | `SNAPSHOT` | Calls the external source and stores the observation. | Does not call the external source; creates `UNAVAILABLE` with `PAST_SNAPSHOT_NOT_CAPTURED`. |
+                | `HISTORICAL` | Calls the external source for `effectiveAt`. | Calls the historical external source for `effectiveAt`. |
+
+                Existing result behavior:
+
+                - `COMPLETED`, `UNAVAILABLE` and `IN_PROGRESS` are returned as-is; no new external call is made.
+                - `FAILED` is reclaimed using the same document and reset to `IN_PROGRESS`. A retried
+                  `SNAPSHOT` in `REPLAY` becomes `UNAVAILABLE` without an external call.
+                - The stored `acquisitionMode` describes the request that created or last retried the result.
+                  A cache hit can therefore return a different mode from the current request.
+
+                With `isAsync=false`, a new external operation finishes before responding. With
+                `isAsync=true`, a new external operation returns `IN_PROGRESS` and continues in the
+                background. Cache hits and `SNAPSHOT` + `REPLAY` can return a terminal result immediately
+                even when `isAsync=true`.
 
                 Accepts a service token or a user token with the `SUPERADMIN` system role.
             requestBody:
                 $ref: '#/components/requestBodies/GenerateFetchResultBody'
             responses:
                 '200':
-                    description: Fetch result created successfully (or existing duplicated result returned).
+                    description: |
+                        Result claimed, resolved, or reused. Domain outcomes such as `UNAVAILABLE` and
+                        external-fetch `FAILED` are returned as successful HTTP responses; inspect `data.status`.
                     content:
                         application/json:
                             schema:
@@ -225,6 +254,137 @@ paths:
                                       properties:
                                           data:
                                               $ref: '#/components/schemas/FetchResult'
+                            examples:
+                                asynchronousCapture:
+                                    summary: New asynchronous capture still being processed
+                                    value:
+                                        success: true
+                                        message: Fetch result started asynchronously
+                                        httpStatus: 200
+                                        appCode: SUCCESS
+                                        data:
+                                            _id: 67c9ff7b2ddf1b3940f9f321
+                                            startDate: '2026-04-10T09:30:00.000Z'
+                                            endDate: null
+                                            effectiveAt: '2026-04-10T09:30:00.000Z'
+                                            temporalCapability: SNAPSHOT
+                                            acquisitionMode: CAPTURE
+                                            status: IN_PROGRESS
+                                            unavailableReason: null
+                                            fetcherConfig:
+                                                owner: governify
+                                                repository: fetcher
+                                            configHash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                                            data: null
+                                            createdAt: '2026-04-10T09:30:00.000Z'
+                                            updatedAt: '2026-04-10T09:30:00.000Z'
+                                            __v: 0
+                                        error: null
+                                completedCapture:
+                                    summary: Snapshot captured successfully
+                                    value:
+                                        success: true
+                                        message: Fetch result generated
+                                        httpStatus: 200
+                                        appCode: SUCCESS
+                                        data:
+                                            _id: 67c9ff7b2ddf1b3940f9f322
+                                            startDate: '2026-04-10T09:29:59.950Z'
+                                            endDate: '2026-04-10T09:30:00.120Z'
+                                            effectiveAt: '2026-04-10T09:30:00.000Z'
+                                            temporalCapability: SNAPSHOT
+                                            acquisitionMode: CAPTURE
+                                            status: COMPLETED
+                                            unavailableReason: null
+                                            fetcherConfig:
+                                                owner: governify
+                                                repository: fetcher
+                                            configHash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                                            data:
+                                                issues:
+                                                    - number: 42
+                                                      column: In progress
+                                            createdAt: '2026-04-10T09:29:59.950Z'
+                                            updatedAt: '2026-04-10T09:30:00.120Z'
+                                            __v: 0
+                                        error: null
+                                unavailableSnapshotReplay:
+                                    summary: Past snapshot was not captured
+                                    value:
+                                        success: true
+                                        message: Fetch result generated
+                                        httpStatus: 200
+                                        appCode: SUCCESS
+                                        data:
+                                            _id: 67c9ff7b2ddf1b3940f9f323
+                                            startDate: '2026-04-17T12:00:00.000Z'
+                                            endDate: '2026-04-17T12:00:00.005Z'
+                                            effectiveAt: '2026-04-10T09:30:00.000Z'
+                                            temporalCapability: SNAPSHOT
+                                            acquisitionMode: REPLAY
+                                            status: UNAVAILABLE
+                                            unavailableReason: PAST_SNAPSHOT_NOT_CAPTURED
+                                            fetcherConfig:
+                                                owner: governify
+                                                repository: fetcher
+                                            configHash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                                            data: null
+                                            createdAt: '2026-04-17T12:00:00.000Z'
+                                            updatedAt: '2026-04-17T12:00:00.005Z'
+                                            __v: 0
+                                        error: null
+                                completedHistoricalReplay:
+                                    summary: Historical source queried during replay
+                                    value:
+                                        success: true
+                                        message: Fetch result generated
+                                        httpStatus: 200
+                                        appCode: SUCCESS
+                                        data:
+                                            _id: 67c9ff7b2ddf1b3940f9f324
+                                            startDate: '2026-04-17T12:00:00.000Z'
+                                            endDate: '2026-04-17T12:00:00.220Z'
+                                            effectiveAt: '2026-04-10T09:30:00.000Z'
+                                            temporalCapability: HISTORICAL
+                                            acquisitionMode: REPLAY
+                                            status: COMPLETED
+                                            unavailableReason: null
+                                            fetcherConfig:
+                                                latitude: 37.39
+                                                longitude: -5.99
+                                            configHash: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+                                            data:
+                                                temperature: 21.4
+                                                unit: celsius
+                                            createdAt: '2026-04-17T12:00:00.000Z'
+                                            updatedAt: '2026-04-17T12:00:00.220Z'
+                                            __v: 0
+                                        error: null
+                                failedExternalFetch:
+                                    summary: External source failed; the next request retries this document
+                                    value:
+                                        success: true
+                                        message: Fetch result generated
+                                        httpStatus: 200
+                                        appCode: SUCCESS
+                                        data:
+                                            _id: 67c9ff7b2ddf1b3940f9f325
+                                            startDate: '2026-04-10T09:30:00.000Z'
+                                            endDate: '2026-04-10T09:30:03.000Z'
+                                            effectiveAt: '2026-04-10T09:30:00.000Z'
+                                            temporalCapability: SNAPSHOT
+                                            acquisitionMode: CAPTURE
+                                            status: FAILED
+                                            unavailableReason: null
+                                            fetcherConfig:
+                                                owner: governify
+                                                repository: fetcher
+                                            configHash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                                            data: null
+                                            createdAt: '2026-04-10T09:29:55.000Z'
+                                            updatedAt: '2026-04-10T09:30:03.000Z'
+                                            __v: 0
+                                        error: null
                 '401':
                     $ref: '#/components/responses/Unauthorized'
                 '403':
@@ -461,7 +621,10 @@ components:
             name: isAsync
             in: query
             required: false
-            description: If true, returns the claimed result and executes processing in the background.
+            description: |
+                If `true`, a newly claimed external operation continues in the background and the
+                response normally contains `IN_PROGRESS`. It has no delaying effect on cache hits or
+                on `SNAPSHOT` + `REPLAY`, which can return a terminal result immediately.
             schema:
                 type: boolean
                 default: false
@@ -470,29 +633,42 @@ components:
     # ── Request Bodies ────────────────────────
     requestBodies:
         FetchFetcherBody:
-            description: Request body for executing a fetcher
+            description: |
+                Request body for a direct, non-persisted execution. The fetcher's registered
+                `temporalCapability` determines whether the requested mode is supported.
             required: true
             content:
                 application/json:
                     schema:
                         type: object
                         properties:
-                            date:
-                                type: string
-                                format: date-time
-                                description: Required ISO 8601 request date
-                                example: '2026-04-10T09:30:00.000Z'
+                            temporalContext:
+                                $ref: '#/components/schemas/TemporalContext'
                             fetcherConfig:
                                 $ref: '#/components/schemas/FetcherConfig'
                         required:
-                            - date
+                            - temporalContext
                             - fetcherConfig
-                    example:
-                        date: '2026-04-10T09:30:00.000Z'
-                        fetcherConfig:
-                            owner: governify
-                            repository: fetcher
-                            token: github_pat_example
+                    examples:
+                        snapshotCapture:
+                            summary: Direct observation of a snapshot source
+                            value:
+                                temporalContext:
+                                    effectiveAt: '2026-04-10T09:30:00.000Z'
+                                    mode: CAPTURE
+                                fetcherConfig:
+                                    owner: governify
+                                    repository: fetcher
+                                    token: github_pat_example
+                        historicalReplay:
+                            summary: Direct historical query for a past instant
+                            value:
+                                temporalContext:
+                                    effectiveAt: '2026-04-01T09:30:00.000Z'
+                                    mode: REPLAY
+                                fetcherConfig:
+                                    latitude: 37.39
+                                    longitude: -5.99
         ValidateFetcherBody:
             description: Optional request body containing the configuration to validate
             content:
@@ -509,29 +685,61 @@ components:
                             token: github_pat_example
 
         GenerateFetchResultBody:
-            description: Request body for generating a fetch result
+            description: |
+                Request body for resolving a persisted fetch result. `CAPTURE` and `REPLAY` express
+                the caller's intent; they do not override the fetcher's registered capability.
             required: true
             content:
                 application/json:
                     schema:
                         type: object
                         properties:
-                            date:
-                                type: string
-                                format: date-time
-                                description: Fetch date used to initialize the fetch result
-                                example: '2026-04-10T09:30:00.000Z'
+                            temporalContext:
+                                $ref: '#/components/schemas/TemporalContext'
                             fetcherConfig:
                                 $ref: '#/components/schemas/FetcherConfig'
                         required:
-                            - date
+                            - temporalContext
                             - fetcherConfig
-                    example:
-                        date: '2026-04-10T09:30:00.000Z'
-                        fetcherConfig:
-                            owner: governify
-                            repository: fetcher
-                            token: github_pat_example
+                    examples:
+                        captureSnapshot:
+                            summary: Capture a snapshot at the scheduled instant
+                            value:
+                                temporalContext:
+                                    effectiveAt: '2026-04-10T09:30:00.000Z'
+                                    mode: CAPTURE
+                                fetcherConfig:
+                                    owner: governify
+                                    repository: fetcher
+                                    token: github_pat_example
+                        replaySnapshot:
+                            summary: Reuse a previously captured snapshot or return UNAVAILABLE
+                            value:
+                                temporalContext:
+                                    effectiveAt: '2026-04-10T09:30:00.000Z'
+                                    mode: REPLAY
+                                fetcherConfig:
+                                    owner: governify
+                                    repository: fetcher
+                                    token: github_pat_example
+                        captureHistorical:
+                            summary: Capture data from a historical-capable source
+                            value:
+                                temporalContext:
+                                    effectiveAt: '2026-04-10T09:30:00.000Z'
+                                    mode: CAPTURE
+                                fetcherConfig:
+                                    latitude: 37.39
+                                    longitude: -5.99
+                        replayHistorical:
+                            summary: Reuse cached data or query a historical source
+                            value:
+                                temporalContext:
+                                    effectiveAt: '2026-04-01T09:30:00.000Z'
+                                    mode: REPLAY
+                                fetcherConfig:
+                                    latitude: 37.39
+                                    longitude: -5.99
 
         UpdateFetchResultBody:
             description: Request body for updating a fetch result
@@ -542,7 +750,7 @@ components:
                     example:
                         status: COMPLETED
                         startDate: '2026-04-06T10:59:55.000Z'
-                        date: '2026-04-06T11:00:00.000Z'
+                        effectiveAt: '2026-04-06T11:00:00.000Z'
                         endDate: '2026-04-06T11:00:00.000Z'
                         data: This is a placeholder for GitHub fetcher data
 
@@ -630,6 +838,32 @@ components:
                             message: Internal server error
 
     schemas:
+        TemporalContext:
+            type: object
+            description: |
+                Temporal intent of the operation. The timestamp is exact: the fetcher does not apply
+                observation windows, tolerances, or a maximum lag.
+            additionalProperties: false
+            properties:
+                effectiveAt:
+                    type: string
+                    format: date-time
+                    description: Exact instant whose data the caller wants to represent, in ISO 8601 format.
+                    example: '2026-04-10T09:30:00.000Z'
+                mode:
+                    type: string
+                    enum: [CAPTURE, REPLAY]
+                    description: |
+                        Acquisition intent:
+
+                        - `CAPTURE`: observe and preserve the source at `effectiveAt`.
+                        - `REPLAY`: reconstruct `effectiveAt`. A missing `SNAPSHOT` is cache-only and
+                          becomes `UNAVAILABLE`; a missing `HISTORICAL` result can be fetched externally.
+                    example: REPLAY
+            required:
+                - effectiveAt
+                - mode
+
         # ── Standard response ────────────────────
         JsonValue:
             description: Any JSON-compatible value, including null
@@ -719,6 +953,17 @@ components:
                     type: string
                     description: Registered fetcher identifier
                     example: FT_GQL_GITHUB_ISSUES
+                temporalCapability:
+                    type: string
+                    enum: [SNAPSHOT, HISTORICAL]
+                    description: |
+                        Temporal behavior registered by the fetcher:
+
+                        - `SNAPSHOT`: the external source only exposes its current state. External access
+                          is allowed in `CAPTURE`; `REPLAY` can only reuse an already stored result.
+                        - `HISTORICAL`: the source can answer for `effectiveAt`, so missing results may be
+                          fetched in both `CAPTURE` and `REPLAY`.
+                    example: SNAPSHOT
                 moreInfo:
                     $ref: '#/components/schemas/FetcherMoreInfo'
                 fetcherConfigSchema:
@@ -731,6 +976,7 @@ components:
                     example: 'async _fetcherConfig => ({ data: [] })'
             required:
                 - id
+                - temporalCapability
                 - moreInfo
                 - fetcherConfigSchema
                 - fetchScript
@@ -868,31 +1114,71 @@ components:
 
         FetchResult:
             type: object
-            description: Fetch result entity persisted in MongoDB
+            description: |
+                Persisted temporal result. Within a fetcher's collection, `effectiveAt` plus `configHash`
+                form the unique logical key. `COMPLETED`, `UNAVAILABLE`, and `IN_PROGRESS` results are
+                reused. A `FAILED` result is retried by updating the same document.
             additionalProperties: false
             properties:
                 _id:
                     type: string
+                    description: Stable document identifier, preserved across retries of a `FAILED` result.
                     example: 67c9ff7b2ddf1b3940f9f321
                 startDate:
                     type: string
                     format: date-time
+                    description: When the current execution was claimed.
                     example: '2026-04-06T10:59:55.000Z'
                 endDate:
                     type: string
                     format: date-time
                     nullable: true
+                    description: When the current execution reached a terminal state; null while `IN_PROGRESS`.
                     example: '2026-04-06T11:00:00.000Z'
-                date:
+                effectiveAt:
                     type: string
                     format: date-time
+                    description: Exact instant represented by this result and part of its logical cache key.
                     example: '2026-04-06T11:00:00.000Z'
+                temporalCapability:
+                    type: string
+                    enum: [SNAPSHOT, HISTORICAL]
+                    description: Capability of the fetcher recorded when this result was created or last retried.
+                acquisitionMode:
+                    type: string
+                    enum: [CAPTURE, REPLAY]
+                    description: |
+                        Mode that created or last retried this document. On a cache hit this can differ
+                        from the current request's mode because the stored result is returned unchanged.
                 status:
                     type: string
-                    enum: [IN_PROGRESS, COMPLETED, FAILED]
+                    enum: [IN_PROGRESS, COMPLETED, UNAVAILABLE, FAILED]
+                    description: |
+                        Result lifecycle:
+
+                        - `IN_PROGRESS`: an asynchronous or concurrent external operation is running.
+                        - `COMPLETED`: data was obtained successfully and is available in `data`.
+                        - `UNAVAILABLE`: the requested instant cannot be resolved under the temporal rules;
+                          this is a terminal, reusable domain outcome, not an HTTP error.
+                        - `FAILED`: the external operation failed; the next generate request reclaims and retries it.
                     example: COMPLETED
+                unavailableReason:
+                    type: string
+                    nullable: true
+                    enum: [PAST_SNAPSHOT_NOT_CAPTURED, HISTORICAL_DATA_NOT_AVAILABLE]
+                    description: |
+                        Reason for `UNAVAILABLE`; null for every other status.
+
+                        - `PAST_SNAPSHOT_NOT_CAPTURED`: replay requested for a snapshot that was not stored.
+                        - `HISTORICAL_DATA_NOT_AVAILABLE`: reserved for a historical source that can
+                          explicitly report that the instant has no data. Generic source errors produce `FAILED`.
                 fetcherConfig:
                     $ref: '#/components/schemas/FetcherConfig'
+                configHash:
+                    type: string
+                    description: SHA-256 hash of the canonical fetcher configuration and part of the logical cache key.
+                    pattern: '^[a-f0-9]{64}$'
+                    example: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
                 data:
                     $ref: '#/components/schemas/JsonValue'
                 createdAt:
@@ -911,9 +1197,13 @@ components:
                 - _id
                 - startDate
                 - endDate
-                - date
+                - effectiveAt
+                - temporalCapability
+                - acquisitionMode
                 - status
+                - unavailableReason
                 - fetcherConfig
+                - configHash
                 - data
                 - createdAt
                 - updatedAt
@@ -931,13 +1221,13 @@ components:
                     type: string
                     format: date-time
                     nullable: true
-                date:
+                effectiveAt:
                     type: string
                     format: date-time
                     nullable: true
                 status:
                     type: string
-                    enum: [IN_PROGRESS, COMPLETED, FAILED]
+                    enum: [IN_PROGRESS, COMPLETED, UNAVAILABLE, FAILED]
                 fetcherConfig:
                     $ref: '#/components/schemas/FetcherConfig'
                 data:

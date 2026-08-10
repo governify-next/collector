@@ -2,17 +2,21 @@ import { Request, Response, NextFunction } from 'express';
 import { sendSuccess } from '../utils/standardResponse.js';
 import * as fetchResultService from '../services/fetchResult.service.js';
 import { IFetchResult } from '../models/fetchResult.model.js';
+import { TemporalMode } from '../types/temporal.js';
 
 export const generateFetchResult = async (req: Request, res: Response, next: NextFunction) => {
     try {
         const { fetcherId } = req.params;
-        const { date, fetcherConfig } = req.body;
+        const { temporalContext, fetcherConfig } = req.body;
 
         const isAsync = req.query.isAsync === 'true';
         const fetchResult = await fetchResultService.generateFetchResult(
             isAsync,
             fetcherId,
-            date,
+            {
+                effectiveAt: new Date(temporalContext.effectiveAt),
+                mode: temporalContext.mode as TemporalMode,
+            },
             fetcherConfig,
         );
 

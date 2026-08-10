@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { IFetcher } from '../../../../types/fetcher.js';
+import { TemporalCapability } from '../../../../types/temporal.js';
 import { githubGraphQL } from '../../utils/github.graphql.util.js';
 
 // Graphql no permite actualmente traer más de 100 items por proyecto sin anidar
@@ -103,6 +104,7 @@ const getProjectItems = async (projectId: string, token: string): Promise<unknow
 
 export const FT_GQL_GITHUB_PROJECTV2_ITEMS: IFetcher = {
     id: 'FT_GQL_GITHUB_PROJECTV2_ITEMS',
+    temporalCapability: TemporalCapability.SNAPSHOT,
     moreInfo: {
         title: 'GitHub ProjectV2 Items Fetcher',
         description:

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { IFetcher } from '../../../../types/fetcher.js';
+import { TemporalCapability } from '../../../../types/temporal.js';
 import { githubGraphQL } from '../../utils/github.graphql.util.js';
 
 interface PullRequestsPage {
@@ -78,6 +79,7 @@ const getPullRequests = async (
 
 export const FT_GQL_GITHUB_PULL_REQUESTS: IFetcher = {
     id: 'FT_GQL_GITHUB_PULL_REQUESTS',
+    temporalCapability: TemporalCapability.SNAPSHOT,
     moreInfo: {
         title: 'GitHub Pull Requests Fetcher',
         description:

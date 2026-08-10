@@ -1,10 +1,45 @@
 import { IFetchResult, getFetcherResultsModel } from '../models/fetchResult.model.js';
+import { FetchStatus } from '../types/fetchStatus.js';
 
 export const claimFetchResultByFetcherId = async (
     fetcherId: string,
     fetcherResultData: Partial<IFetchResult>,
 ) => {
     const FetchResultModel = getFetcherResultsModel(fetcherId);
+
+    const key = {
+        effectiveAt: fetcherResultData.effectiveAt,
+        configHash: fetcherResultData.configHash,
+    };
+
+    const existingFetchResult = await FetchResultModel.findOne(key);
+    if (existingFetchResult) {
+        if (existingFetchResult.status !== FetchStatus.FAILED) {
+            return {
+                claimedFetchResult: existingFetchResult,
+                shouldFetch: false,
+            };
+        }
+
+        const retriedFetchResult = await FetchResultModel.findOneAndUpdate(
+            { ...key, status: FetchStatus.FAILED },
+            { $set: fetcherResultData },
+            { new: true },
+        );
+
+        if (retriedFetchResult) {
+            return {
+                claimedFetchResult: retriedFetchResult,
+                shouldFetch: true,
+            };
+        }
+
+        return {
+            claimedFetchResult: await FetchResultModel.findOne(key),
+            shouldFetch: false,
+        };
+    }
+
     try {
         const fetchResult = new FetchResultModel(fetcherResultData);
         const createdFetchResult = await fetchResult.save();
@@ -19,13 +54,10 @@ export const claimFetchResultByFetcherId = async (
             throw error;
         }
         // Ya existe el fetchResult en BD, buscar y devolver
-        const existingFetchResult = await FetchResultModel.findOne({
-            date: fetcherResultData.date,
-            fetcherConfig: fetcherResultData.fetcherConfig,
-        });
+        const concurrentFetchResult = await FetchResultModel.findOne(key);
 
         return {
-            claimedFetchResult: existingFetchResult,
+            claimedFetchResult: concurrentFetchResult,
             shouldFetch: false,
         };
     }

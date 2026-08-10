@@ -1,31 +1,54 @@
 import * as fetchResultRepository from '../repositories/fetchResult.repository.js';
 import * as fetcherService from './fetchers/fetcher.service.js';
 import { IFetchResult } from '../models/fetchResult.model.js';
-import { FetchStatus } from '../types/fetchStatus.js';
+import { FetchStatus, FetchUnavailabilityReason } from '../types/fetchStatus.js';
 import { getLogger } from '../utils/logger.js';
+import { ITemporalContext, TemporalCapability, TemporalMode } from '../types/temporal.js';
+import { hashFetcherConfig } from '../utils/canonicalJson.js';
 
 const logger = getLogger().setTag('fetchResult.service.ts');
 
 export const generateFetchResult = async (
     isAsync: boolean,
     fetcherId: string,
-    date: Date,
+    temporalContext: ITemporalContext,
     fetcherConfig: Record<string, unknown>,
 ) => {
+    const fetcher = fetcherService.getFetcherById(fetcherId);
     const { claimedFetchResult, shouldFetch } = await claimInitialFetchResult(
         fetcherId,
-        date,
+        temporalContext,
         fetcherConfig,
+        fetcher.temporalCapability,
     );
 
-    if (!shouldFetch) {
+    if (!claimedFetchResult || !shouldFetch) {
         return claimedFetchResult;
+    }
+
+    if (
+        fetcher.temporalCapability === TemporalCapability.SNAPSHOT &&
+        temporalContext.mode === TemporalMode.REPLAY
+    ) {
+        return await fetchResultRepository.updateFetchResultByFetcherIdAndFetchResultId(
+            fetcherId,
+            claimedFetchResult._id.toString(),
+            {
+                status: FetchStatus.UNAVAILABLE,
+                endDate: new Date(),
+                unavailableReason: FetchUnavailabilityReason.PAST_SNAPSHOT_NOT_CAPTURED,
+            },
+        );
     }
 
     const fetchResultAndSave = async () => {
         let fetchResult: { data: unknown };
         try {
-            fetchResult = await fetcherService.fetchFetcher(fetcherId, fetcherConfig);
+            fetchResult = await fetcherService.fetchFetcher(
+                fetcherId,
+                fetcherConfig,
+                temporalContext,
+            );
         } catch (error) {
             logger.error(
                 `Failed to generate fetch result for fetcher ${fetcherId}: ${
@@ -38,6 +61,7 @@ export const generateFetchResult = async (
                 {
                     status: FetchStatus.FAILED,
                     endDate: new Date(),
+                    unavailableReason: null,
                 },
             );
         }
@@ -48,6 +72,7 @@ export const generateFetchResult = async (
             {
                 status: FetchStatus.COMPLETED,
                 endDate: new Date(),
+                unavailableReason: null,
                 data: fetchResult.data,
             },
         );
@@ -68,15 +93,20 @@ export const generateFetchResult = async (
 
 const claimInitialFetchResult = async (
     fetcherId: string,
-    date: Date,
+    temporalContext: ITemporalContext,
     fetcherConfig: Record<string, unknown>,
+    temporalCapability: TemporalCapability,
 ) => {
     return await fetchResultRepository.claimFetchResultByFetcherId(fetcherId, {
         startDate: new Date(),
         endDate: null,
-        date: date,
+        effectiveAt: temporalContext.effectiveAt,
         status: FetchStatus.IN_PROGRESS,
+        unavailableReason: null,
+        temporalCapability,
+        acquisitionMode: temporalContext.mode,
         fetcherConfig: fetcherConfig,
+        configHash: hashFetcherConfig(fetcherConfig),
         data: null,
     });
 };
