@@ -40,7 +40,7 @@ paths:
                                         example: ok
                                     message:
                                         type: string
-                                        example: Health check passed
+                                        example: Health check passed!
                                 required:
                                     - status
                                     - message
