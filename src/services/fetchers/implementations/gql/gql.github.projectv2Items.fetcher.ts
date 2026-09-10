@@ -19,16 +19,9 @@ const getBasicProjectItems = async (projectId: string, token: string) => {
                   endCursor
                 }
                 nodes {
-                  fieldValues(first: 10) {
-                    nodes {
-                      ... on ProjectV2ItemFieldSingleSelectValue {
-                        name
-                        field {
-                          ... on ProjectV2SingleSelectField {
-                            name
-                          }
-                        }
-                      }
+                  fieldValueByName(name: "Status") {
+                    ... on ProjectV2ItemFieldSingleSelectValue {
+                        status: name
                     }
                   }
                   content {
@@ -41,6 +34,9 @@ const getBasicProjectItems = async (projectId: string, token: string) => {
                         nodes {
                           login
                         }
+                      }
+                      issueType {
+                        name
                       }
                       linkedBranches(first: 10) {
                         nodes {
@@ -104,7 +100,7 @@ const getProjectItems = async (projectId: string, token: string) => {
                         number
                         url
                         title
-                        timelineItems(first: 100, itemTypes: [PROJECT_V2_ITEM_STATUS_CHANGED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_TYPE_ADDED_EVENT, ISSUE_TYPE_CHANGED_EVENT, ISSUE_TYPE_REMOVED_EVENT]) {
+                        timelineItems(first: 100, itemTypes: [PROJECT_V2_ITEM_STATUS_CHANGED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, ISSUE_TYPE_ADDED_EVENT, ISSUE_TYPE_CHANGED_EVENT, ISSUE_TYPE_REMOVED_EVENT, CONNECTED_EVENT, DISCONNECTED_EVENT]) {
                           nodes {
                             __typename
                             ... on ProjectV2ItemStatusChangedEvent {
@@ -146,6 +142,28 @@ const getProjectItems = async (projectId: string, token: string) => {
                                 createdAt
                                 issueType {
                                     name
+                                }
+                            }
+                            ... on ConnectedEvent {
+                                createdAt
+                                subject {
+                                    __typename
+                                    ... on PullRequest {
+                                        number
+                                        closedAt
+                                        mergedAt
+                                    }
+                                }
+                            }
+                            ... on DisconnectedEvent {
+                                createdAt
+                                subject {
+                                    __typename
+                                    ... on PullRequest {
+                                        number
+                                        closedAt
+                                        mergedAt
+                                    }
                                 }
                             }
                           }
